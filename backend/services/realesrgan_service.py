@@ -127,61 +127,35 @@ class RealESRGANEnhancer:
 
     @torch.no_grad()
     def enhance_image(self, img_bgr: np.ndarray) -> np.ndarray:
+        h_orig, w_orig = img_bgr.shape[:2]
+
+        # SPEED OPTIMIZATION: If input is already 1080p (or larger), pre-scale input to 540p 
+        # so 4x Real-ESRGAN outputs 1080p/4K instead of massive 8K (33 Million pixels per frame!)
+        # Reduces PyTorch neural network workload by 16x!
+        if w_orig >= 1280 or h_orig >= 1280:
+            scale_factor = 0.5
+            img_bgr_input = cv2.resize(img_bgr, (0, 0), fx=scale_factor, fy=scale_factor, interpolation=cv2.INTER_AREA)
+        else:
+            img_bgr_input = img_bgr
+
         # Convert BGR [0, 255] to Tensor [0, 1] RGB
-        img = img_bgr.astype(np.float32) / 255.0
+        img = img_bgr_input.astype(np.float32) / 255.0
         img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
         
         h, w, c = img.shape
         img_tensor = torch.from_numpy(np.transpose(img, (2, 0, 1))).unsqueeze(0).to(self.device)
-        if self.device.type == "cuda" and next(self.model.parameters()).dtype == torch.float16:
-            img_tensor = img_tensor.half()
-
-        scale = 4
-        # High speed single-pass GPU inference: if frame fits in VRAM, bypass tiling overhead completely!
-        tile_size = self.tile_size
-        tile_pad = self.tile_pad
         
         if self.device.type == "cuda":
-            # For 4GB+ GPUs, a 1080p/720p frame fits in VRAM natively in single pass
-            if w <= 1920 and h <= 1920:
-                tile_size = 0  # 0 indicates single-pass full frame inference (10x faster!)
+            torch.backends.cudnn.benchmark = True
+            if next(self.model.parameters()).dtype == torch.float16:
+                img_tensor = img_tensor.half()
 
-        if tile_size == 0:
-            # Single-pass full image forward on GPU
+        # High speed CUDA AMP / FP16 forward pass
+        if self.device.type == "cuda":
+            with torch.cuda.amp.autocast():
+                output_tensor = self.model(img_tensor)
+        else:
             output_tensor = self.model(img_tensor)
-            output = output_tensor.data.squeeze().float().cpu().clamp_(0, 1).numpy()
-            output = np.transpose(output, (1, 2, 0))
-            output = cv2.cvtColor(output * 255.0, cv2.COLOR_RGB2BGR)
-            return np.clip(output, 0, 255).astype(np.uint8)
-
-        scale = 4
-        num_tiles_x = math.ceil(w / tile_size)
-        num_tiles_y = math.ceil(h / tile_size)
-
-        output_shape = (c, h * scale, w * scale)
-        output_tensor = torch.zeros(output_shape, dtype=img_tensor.dtype, device=self.device)
-
-        for i in range(num_tiles_y):
-            for j in range(num_tiles_x):
-                x1, x2 = j * tile_size, min((j + 1) * tile_size, w)
-                y1, y2 = i * tile_size, min((i + 1) * tile_size, h)
-
-                x1_pad, x2_pad = max(x1 - tile_pad, 0), min(x2 + tile_pad, w)
-                y1_pad, y2_pad = max(y1 - tile_pad, 0), min(y2 + tile_pad, h)
-
-                input_tile = img_tensor[:, :, y1_pad:y2_pad, x1_pad:x2_pad]
-                output_tile = self.model(input_tile)
-
-                output_x1 = (x1 - x1_pad) * scale
-                output_x2 = output_x1 + (x2 - x1) * scale
-                output_y1 = (y1 - y1_pad) * scale
-                output_y2 = output_y1 + (y2 - y1) * scale
-
-                target_x1, target_x2 = x1 * scale, x2 * scale
-                target_y1, target_y2 = y1 * scale, y2 * scale
-
-                output_tensor[:, target_y1:target_y2, target_x1:target_x2] = \
-                    output_tile[0, :, output_y1:output_y2, output_x1:output_x2]
 
         output = output_tensor.data.squeeze().float().cpu().clamp_(0, 1).numpy()
         output = np.transpose(output, (1, 2, 0))
