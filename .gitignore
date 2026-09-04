@@ -1,0 +1,9 @@
+venv/
+__pycache__/
+*.pyc
+temp/
+input/*
+output/*
+models/realesrgan/*.pth
+data/app.log
+.DS_Store
