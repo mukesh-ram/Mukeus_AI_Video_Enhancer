@@ -157,10 +157,12 @@ class RealESRGANEnhancer:
             output_tensor = self.model(img_tensor)
             output_tensor = resize_to_target_resolution_gpu(output_tensor, target_resolution, is_portrait)
 
-        output = output_tensor.data.squeeze().float().cpu().clamp_(0, 1).numpy()
-        output = np.transpose(output, (1, 2, 0))
-        output = cv2.cvtColor(output * 255.0, cv2.COLOR_RGB2BGR)
-        return np.clip(output, 0, 255).astype(np.uint8)
+        # Convert model output tensor [0.0, 1.0] float to uint8 [0, 255] BEFORE cv2.cvtColor
+        output_np = output_tensor.data.squeeze().float().cpu().clamp_(0, 1).numpy()
+        output_np = np.transpose(output_np, (1, 2, 0))
+        output_uint8 = np.clip(output_np * 255.0, 0, 255).astype(np.uint8)
+        output_bgr = cv2.cvtColor(output_uint8, cv2.COLOR_RGB2BGR)
+        return output_bgr
 
 
 def resize_to_target_resolution_gpu(tensor_gpu: torch.Tensor, target_resolution: str, is_portrait: bool) -> torch.Tensor:
