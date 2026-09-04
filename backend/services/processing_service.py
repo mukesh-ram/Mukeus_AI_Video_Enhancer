@@ -173,14 +173,11 @@ def run_enhancement_job(
                 logger.warning(f"Could not read frame {frame_path}, skipping.")
                 continue
 
-            # Step A: Real-ESRGAN AI enhancement (Single-pass GPU inference)
-            enhanced_bgr = enhancer.enhance_image(img_bgr)
+            # Step A: Real-ESRGAN AI enhancement + Native GPU Resizing
+            enhanced_bgr = enhancer.enhance_image(img_bgr, resolution, orig_metadata.is_portrait)
             
             # Step B: Apply Natural / Clean / Strong mode filter (Vectorized GPU filter)
-            mode_filtered_bgr = apply_mode_filters(enhanced_bgr, img_bgr, mode)
-            
-            # Step C: Resize to target resolution
-            final_frame_bgr = resize_to_target_resolution(mode_filtered_bgr, resolution, orig_metadata.is_portrait)
+            final_frame_bgr = apply_mode_filters(enhanced_bgr, img_bgr, mode)
             
             # Save enhanced frame in fast JPG format
             out_frame_path = enhanced_dir / frame_path.name
